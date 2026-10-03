@@ -935,6 +935,8 @@ const nearBottom = () => list.scrollHeight - list.scrollTop - list.clientHeight 
 let lastChat = null;
 function renderChat(chat) {
   lastChat = chat;
+  // pickMenu leaves "切换中…" until the server confirms; also clear it once bubbles refresh.
+  if (/^切换中/.test($('msg').textContent || '')) status('');
   $('empty').hidden = !!chat;
   $('older').hidden = !chat;
   $('pickMode').hidden = !chat?.mode;
