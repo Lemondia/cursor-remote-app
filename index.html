@@ -190,6 +190,13 @@
   #gateInput.code { font-size: 26px; letter-spacing: 8px; text-align: center; }
   #gateMsg.err { color: #f77; }
   #gateInfo { font-size: 12px; color: #777; }
+  #gateNav { display: none; flex-direction: column; gap: 8px; margin-top: 4px; }
+  #gateNav.show { display: flex; }
+  #gateNav button {
+    padding: 11px; background: #2d2d2d; border: 1px solid #3c3c3c; color: #ddd;
+    font: inherit; font-weight: 500; border-radius: 8px; width: 100%;
+  }
+  #gateNav button.primary { background: #0e639c; border-color: #1177bb; color: #fff; font-weight: 600; }
 </style>
 </head>
 <body>
@@ -276,6 +283,7 @@
   <button id="gateBtn" class="primary"></button>
   <a id="gateApp" class="primary-link" hidden>在 App 中打开</a>
   <button id="gateRetry">重试</button>
+  <div id="gateNav"></div>
   <div id="gateInfo"></div>
 </div>
 
@@ -439,7 +447,27 @@ function send(obj) {
 
 /* ---------- gate: pairing / 2FA / offline ---------- */
 let gateSubmit = null;
-function gate({ msg = '', err = false, input = null, retry = false, appLink = null } = {}) {
+function gateNavActions({ err = false, retry = false } = {}) {
+  const nav = $('gateNav');
+  const hosts = loadHosts().filter(h => h.key && h.token);
+  const cur = activeHost();
+  const lastId = store.get('lastGoodHost');
+  const last = hosts.find(h => h.id === lastId && h.id !== cur?.id);
+  const others = hosts.filter(h => h.id !== cur?.id);
+  // Show escape hatches whenever stuck on an error / offline screen.
+  const show = err || retry || others.length > 0;
+  if (!show) { nav.classList.remove('show'); nav.innerHTML = ''; return; }
+  let html = '';
+  if (last) html += `<button class="primary" data-gact="backLast">返回「${esc(last.name)}」</button>`;
+  if (others.length) html += `<button data-gact="hosts">我的电脑（${others.length + (cur ? 1 : 0)} 台）</button>`;
+  else html += `<button data-gact="hosts">我的电脑</button>`;
+  html += `<button data-gact="add">添加 / 粘贴配对链接</button>`;
+  if (inApp) html += `<button data-gact="shell">更换 App 壳地址</button>`;
+  if (cur && cur.token) html += `<button data-gact="drop">断开当前电脑，选别的</button>`;
+  nav.innerHTML = html;
+  nav.classList.add('show');
+}
+function gate({ msg = '', err = false, input = null, retry = false, appLink = null, nav = null } = {}) {
   $('gate').classList.add('open');
   $('gateMsg').textContent = msg;
   $('gateMsg').className = err ? 'err' : '';
@@ -460,11 +488,63 @@ function gate({ msg = '', err = false, input = null, retry = false, appLink = nu
   $('gateRetry').hidden = !retry;
   $('gateRetry').textContent = typeof retry === 'string' ? retry : '重试';
   $('gateInfo').textContent = info?.updated ? '电脑端地址更新于 ' + new Date(info.updated).toLocaleString() : '';
+  if (nav === false) { $('gateNav').classList.remove('show'); $('gateNav').innerHTML = ''; }
+  else gateNavActions({ err, retry: !!retry });
 }
 const ungate = () => $('gate').classList.remove('open');
 $('gateBtn').onclick = () => gateSubmit?.($('gateInput').value.trim());
 $('gateInput').onkeydown = e => { if (e.key === 'Enter') $('gateBtn').click(); };
 $('gateRetry').onclick = () => boot();
+$('gateNav').onclick = async e => {
+  const b = e.target.closest('button[data-gact]');
+  if (!b) return;
+  const act = b.dataset.gact;
+  if (act === 'hosts') { ungate(); showHosts(); return; }
+  if (act === 'backLast') {
+    const id = store.get('lastGoodHost');
+    if (id) { ungate(); return switchHost(id); }
+    return;
+  }
+  if (act === 'add') {
+    pending = null;
+    gate({
+      msg: '粘贴另一台电脑上 npm run pair 的链接。\n不会丢掉已保存的电脑。',
+      err: false,
+      input: { placeholder: '粘贴配对链接', button: '添加并配对', submit: text => { ungate(); pastePair(text); } },
+      retry: '取消',
+      nav: false,
+    });
+    $('gateRetry').onclick = () => { $('gateRetry').onclick = () => boot(); showUnpaired(); };
+    return;
+  }
+  if (act === 'shell') {
+    if (inApp) window.CursorRemoteApp?.changeUrl();
+    return;
+  }
+  if (act === 'drop') {
+    const cur = activeHost();
+    if (!cur) return showUnpaired();
+    // Keep host in list but stop trying it; jump to picker.
+    store.set('activeHost', null);
+    store.set('token', null);
+    ungate();
+    showHosts();
+  }
+};
+// Android system back: close sheet / leave failed gate instead of exiting the app.
+window.onAppBack = () => {
+  if ($('viewer')?.classList.contains('open')) { $('vClose')?.click(); return true; }
+  if ($('sheet')?.classList.contains('open') || $('shade')?.classList.contains('open')) { closeSheet(); return true; }
+  if ($('gate')?.classList.contains('open')) {
+    const hosts = loadHosts().filter(h => h.key && h.token);
+    const lastId = store.get('lastGoodHost');
+    if (lastId && hosts.some(h => h.id === lastId)) { switchHost(lastId); return true; }
+    if (hosts.length) { ungate(); showHosts(); return true; }
+    showUnpaired();
+    return true;
+  }
+  return false;
+};
 
 /* ---------- relay discovery & auth ---------- */
 const b64 = s => Uint8Array.from(atob(s), c => c.charCodeAt(0));
@@ -638,7 +718,11 @@ async function boot() {
       return r.json();
     });
   } catch {
-    return gate({ msg: '读取失败，请检查手机网络或该电脑的 App 地址', err: true, retry: true });
+    return gate({
+      msg: '读取失败：打不开这台电脑的地址（常见原因：该电脑还没发布 url.json，或网络不通）。\n\n可点下面返回已保存的电脑，或更换壳地址。',
+      err: true,
+      retry: true,
+    });
   }
   if (pending) {
     store.set('key', pending.key);
@@ -650,7 +734,7 @@ async function boot() {
   try {
     base = await resolveBase();
   } catch (e) {
-    if (e.offline) return gate({ msg: e.message, retry: true });
+    if (e.offline) return gate({ msg: e.message, err: true, retry: true });
     if (e.stale) {
       store.set('key', null); store.set('token', null);
       const dead = activeHost();
@@ -665,7 +749,7 @@ async function boot() {
     me = await api('/api/me').then(r => r.json());
   } catch {
     autoRetry();
-    return gate({ msg: '电脑不在线：可能关机、睡眠，或服务刚重启（新地址约 1 分钟后生效）。会自动重试…', retry: true });
+    return gate({ msg: '电脑不在线：可能关机、睡眠，或服务刚重启（新地址约 1 分钟后生效）。会自动重试…', err: true, retry: true });
   }
   if (!me.paired) {
     store.set('token', null);
@@ -714,6 +798,7 @@ function connect() {
       const hostName = activeHost()?.name;
       status(hostName ? `已连接 · ${hostName}` : '已连接');
       persistActiveHost();
+      if (activeHost()?.id) store.set('lastGoodHost', activeHost().id);
       send({ t: 'mode', mode });
       send({ t: 'windows' });
       const fromNotice = window.CursorRemoteApp?.takeOpenWin?.();
@@ -879,7 +964,7 @@ function showMainMenu() {
     : `<button class="opt" data-act="appUpdate"><span class="lbl">检查 App 更新（当前 v${esc(appVersion)}）</span></button>`;
   const hostTag = activeHost()?.name ? `<span class="tag">${esc(activeHost().name)}</span>` : '';
   openSheet('main', `<h3>菜单</h3>
-    <button class="opt" data-act="hosts"><span class="lbl">我的电脑<span class="sub">多台电脑切换 · v11 · 壳 ${esc(shellAppUrl().replace(/^https:\/\//, '').slice(0, 40))}</span></span>${hostTag}</button>
+    <button class="opt" data-act="hosts"><span class="lbl">我的电脑<span class="sub">多台电脑切换 · v12 · 壳 ${esc(shellAppUrl().replace(/^https:\/\//, '').slice(0, 40))}</span></span>${hostTag}</button>
     ${notifyItem}
     ${inApp && appVersion ? update : ''}
     ${inApp ? '<button class="opt" data-act="changeUrl"><span class="lbl">更换 App 壳地址<span class="sub">请固定为 personal 的 Pages；加电脑用「我的电脑」</span></span></button>'
