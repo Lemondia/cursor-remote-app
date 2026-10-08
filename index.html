@@ -964,7 +964,7 @@ function showMainMenu() {
     : `<button class="opt" data-act="appUpdate"><span class="lbl">检查 App 更新（当前 v${esc(appVersion)}）</span></button>`;
   const hostTag = activeHost()?.name ? `<span class="tag">${esc(activeHost().name)}</span>` : '';
   openSheet('main', `<h3>菜单</h3>
-    <button class="opt" data-act="hosts"><span class="lbl">我的电脑<span class="sub">多台电脑切换 · v12 · 壳 ${esc(shellAppUrl().replace(/^https:\/\//, '').slice(0, 40))}</span></span>${hostTag}</button>
+    <button class="opt" data-act="hosts"><span class="lbl">我的电脑<span class="sub">多台电脑切换 · v13 · 壳 ${esc(shellAppUrl().replace(/^https:\/\//, '').slice(0, 40))}</span></span>${hostTag}</button>
     ${notifyItem}
     ${inApp && appVersion ? update : ''}
     ${inApp ? '<button class="opt" data-act="changeUrl"><span class="lbl">更换 App 壳地址<span class="sub">请固定为 personal 的 Pages；加电脑用「我的电脑」</span></span></button>'
@@ -1252,10 +1252,11 @@ function renderChat(chat) {
   if (/^切换中/.test($('msg').textContent || '')) status('');
   $('empty').hidden = !!chat;
   $('older').hidden = !chat;
-  $('pickMode').hidden = !chat?.mode;
-  $('pickModel').hidden = !chat?.model;
-  if (chat?.mode) $('pickMode').textContent = chat.mode + ' ▾';
-  if (chat?.model) $('pickModel').textContent = chat.model + ' ▾';
+  // Always expose mode/model once a chat panel is readable, even if Cursor's trigger label is missing.
+  $('pickMode').hidden = !chat;
+  $('pickModel').hidden = !chat;
+  $('pickMode').textContent = (chat?.mode || '模式') + ' ▾';
+  $('pickModel').textContent = (chat?.model || '模型') + ' ▾';
   if (!chat) { itemsEl.replaceChildren(); renderQueue(false, []); renderQuestions(null); return; }
   const stick = nearBottom();
   // Anchor on the first visible item so loading older messages doesn't jump.
